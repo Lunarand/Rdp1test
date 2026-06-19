@@ -1,4 +1,4 @@
-name: RDP (fxTunnel + Essential Apps)
+name: Fast RDP (fxTunnel)
 
 on:
   workflow_dispatch:
@@ -11,39 +11,32 @@ jobs:
     steps:    
       - name: Configure Core RDP Settings    
         run: |    
-          # --- AUDIO & SESSION FIXES START HERE ---    
+          # --- AUDIO & SESSION FIXES ---    
           Set-Service -Name Audiosrv -StartupType Automatic    
           Start-Service -Name Audiosrv    
           Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "fDisableAudioCapture" -Value 0 -Force    
-          # --- ADD THIS LINE TO KEEP SESSION ACTIVE IN BACKGROUND ---    
           Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "MaxDisconnectionTime" -Value 0 -Force    
-          # --- FIXES END HERE ---    
 
-          # Enable Remote Desktop and disable Network Level Authentication (Fixed one-liners)
+          # Enable Remote Desktop
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force    
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force    
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force    
 
-          # Remove any existing rule with the same name to avoid duplication    
+          # Firewall
           netsh advfirewall firewall delete rule name="RDP-Tunnel"    
-              
-          # Allow any incoming connection on port 3389 (Fixed one-liner)
           netsh advfirewall firewall add rule name="RDP-Tunnel" dir=in action=allow protocol=TCP localport=3389    
 
-          # (Optional) Restart the Remote Desktop service to ensure changes take effect    
           Restart-Service -Name TermService -Force    
 
-      - name: Create RDP User with Secure Password    
+      - name: Create RDP User  
         env:    
           MY_SECRET_PASS: ${{ secrets.PASS }}    
         run: |    
-          # Check if secret exists    
           if (-not $env:MY_SECRET_PASS) {    
-              Write-Error "Error: Secret 'PASS' is empty or missing. Please add it in Repository Settings."    
+              Write-Error "Error: Secret 'PASS' is missing."    
               exit 1    
           }    
 
-          # Use the Secret Password    
           $password = $env:MY_SECRET_PASS    
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force    
               
@@ -51,114 +44,65 @@ jobs:
           Add-LocalGroupMember -Group "Administrators" -Member "RDP"    
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"    
               
-          # We set the env variable to (Hidden) so it doesn't show in logs later    
-          echo "RDP_CREDS=User: RDP | Password: (Hidden - Check your Secrets)" >> $env:GITHUB_ENV    
-              
           if (-not (Get-LocalUser -Name "RDP")) {    
               Write-Error "User creation failed"    
               exit 1    
           }    
 
-      - name: Install Essential Apps    
+      - name: Install Essential Apps (Fast)    
         run: |    
-          Write-Host "Installing Apps..."    
-              
-          # 1. Install via Chocolatey    
-          choco install winrar -y --no-progress    
-          choco install googlechrome -y --no-progress --ignore-checksums    
-          choco install brave -y --no-progress    
-          choco install discord -y --no-progress    
-              
-          # 2. FIX BRAVE: Move to Public Folder    
-          $BraveAdmin = "C:\Users\runneradmin\AppData\Local\BraveSoftware"    
-          if (Test-Path $BraveAdmin) {    
-              Copy-Item -Path $BraveAdmin -Destination "C:\" -Recurse -Force    
-          }    
-
-          # 3. FIX DISCORD: Move to Public Folder    
-          $DiscordAdmin = "C:\Users\runneradmin\AppData\Local\Discord"    
-          if (Test-Path $DiscordAdmin) {    
-              Copy-Item -Path $DiscordAdmin -Destination "C:\" -Recurse -Force    
-          }    
-              
-          # 4. Create Desktop Shortcuts    
-          $WshShell = New-Object -comObject WScript.Shell    
-              
-          # Brave Shortcut    
-          $BraveLnk = $WshShell.CreateShortcut("C:\Users\Public\Desktop\Brave.lnk")    
-          $BraveLnk.TargetPath = "C:\BraveSoftware\Brave-Browser\Application\brave.exe"    
-          $BraveLnk.Save()    
-
-          # Discord Shortcut    
-          $DiscordExe = Get-ChildItem -Path "C:\Discord" -Recurse -Filter "Discord.exe" | Select-Object -First 1    
-          if ($DiscordExe) {    
-              $DiscordLnk = $WshShell.CreateShortcut("C:\Users\Public\Desktop\Discord.lnk")    
-              $DiscordLnk.TargetPath = $DiscordExe.FullName    
-              $DiscordLnk.Save()    
-          }    
-
-          # WinRAR Shortcut    
-          $RarLnk = $WshShell.CreateShortcut("C:\Users\Public\Desktop\WinRAR.lnk")    
-          $RarLnk.TargetPath = "C:\Program Files\WinRAR\WinRAR.exe"    
-          $RarLnk.Save()    
-              
-          Write-Host "Installation & Shortcuts Complete."    
+          Write-Host "Installing fast essentials..."    
+          choco install winrar googlechrome -y --no-progress --ignore-checksums
 
       - name: Start fxTunnel & Maintain Connection    
         env:
           FXTUN_TOKEN: ${{ secrets.FXTUN_TOKEN }}
         run: |    
-          # Check if fxTunnel token exists
           if (-not $env:FXTUN_TOKEN) {    
-              Write-Error "Error: Secret 'FXTUN_TOKEN' is empty. Please add it in Repository Settings."    
+              Write-Error "Error: Secret 'FXTUN_TOKEN' is missing."    
               exit 1    
           }  
 
-          # 1. Install fxTunnel    
           Write-Host "Installing fxTunnel..."
           irm https://fxtun.dev/install.ps1 | iex
               
-          # 2. Login to fxTunnel
-          Write-Host "Authenticating with fxTunnel..."
-          fxtunnel login --token $env:FXTUN_TOKEN
+          Write-Host "Authenticating..."
+          fxtun login --token $env:FXTUN_TOKEN
           
-          # 3. Start fxTunnel in Background
-          Start-Process -FilePath "fxtunnel" -ArgumentList "tcp 3389" -RedirectStandardOutput "fxtun.log" -PassThru    
+          Write-Host "Starting fxTunnel..."
+          Start-Process -FilePath "fxtun" -ArgumentList "tcp 3389" -RedirectStandardOutput "fxtun_out.log" -RedirectStandardError "fxtun_err.log" -PassThru    
               
-          Write-Host "fxTunnel started. Scanning for address..."    
-              
-          # 4. Find Address    
           $address = $null    
           $i = 0    
-          while ($i -lt 150) { # Wait up to 5 mins    
-              if (Test-Path "fxtun.log") {    
-                  $content = Get-Content "fxtun.log"    
-                  # Scans the log for the public endpoint
-                  $match = $content | Select-String "([a-zA-Z0-9.-]+\.fxtun\.dev:[0-9]+)"    
-                  if ($match) {    
-                      $address = $match.Matches.Groups[1].Value    
-                      break    
-                  }    
+          while ($i -lt 30) { # Wait up to 60 seconds   
+              $logContent = ""
+              if (Test-Path "fxtun_out.log") { $logContent += Get-Content "fxtun_out.log" -Raw }
+              if (Test-Path "fxtun_err.log") { $logContent += Get-Content "fxtun_err.log" -Raw }
+              
+              # Scans for the fxTunnel address properly
+              $match = $logContent | Select-String -Pattern "([a-zA-Z0-9.-]*fxtun\.dev:\d+)"
+              if ($match) {    
+                  $address = $match.Matches[0].Groups[1].Value    
+                  break    
               }    
               Start-Sleep -Seconds 2    
               $i++    
           }    
               
           if (-not $address) {    
-             Write-Error "Failed to get fxTunnel address. Check the logs below:"
-             if (Test-Path "fxtun.log") { Get-Content "fxtun.log" }   
+             Write-Host "Failed to get fxTunnel address. Printing raw logs so you can see why:"
+             if (Test-Path "fxtun_out.log") { Get-Content "fxtun_out.log" }   
+             if (Test-Path "fxtun_err.log") { Get-Content "fxtun_err.log" } 
              exit 1    
           }    
               
-          # 5. Show Details    
           Write-Host "`n=== RDP ACCESS ==="    
           Write-Host "Address: $address"    
           Write-Host "Username: RDP"    
           Write-Host "Password: (Hidden - Check your Secrets)"    
           Write-Host "==================`n"    
               
-          # 6. Keep runner active indefinitely    
           while ($true) {    
-              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"    
+              Write-Host "[$(Get-Date)] RDP Active"    
               Start-Sleep -Seconds 300    
           }
