@@ -1,4 +1,4 @@
-name: Fast RDP (Pinggy + Browsers)
+name: Fast RDP (Pinggy + Browsers + Auto Reconnect)
 
 on:
   workflow_dispatch:
@@ -45,57 +45,65 @@ jobs:
       - name: Install Essential Apps & Browsers   
         run: |    
           Write-Host "Installing apps (Chrome, Brave, Firefox, WinRAR)..."    
-          # Install via Chocolatey
           choco install winrar googlechrome brave firefox -y --no-progress --ignore-checksums
 
-          # FIX BRAVE: Move to Public Folder    
           $BraveAdmin = "C:\Users\runneradmin\AppData\Local\BraveSoftware"    
           if (Test-Path $BraveAdmin) {    
               Copy-Item -Path $BraveAdmin -Destination "C:\" -Recurse -Force    
           }    
               
-          # Create Desktop Shortcuts    
           $WshShell = New-Object -comObject WScript.Shell    
               
-          # Brave Shortcut    
           $BraveLnk = $WshShell.CreateShortcut("C:\Users\Public\Desktop\Brave.lnk")    
           $BraveLnk.TargetPath = "C:\BraveSoftware\Brave-Browser\Application\brave.exe"    
           $BraveLnk.Save()    
 
-          # WinRAR Shortcut    
           $RarLnk = $WshShell.CreateShortcut("C:\Users\Public\Desktop\WinRAR.lnk")    
           $RarLnk.TargetPath = "C:\Program Files\WinRAR\WinRAR.exe"    
           $RarLnk.Save()    
               
           Write-Host "Installation & Shortcuts Complete."
 
-      - name: Start Pinggy Tunnel    
+      - name: Start Persistent Pinggy Tunnel    
         run: |    
-          Write-Host "Starting Pinggy Tunnel..."
-          # Connects over web port 443 to bypass provider firewalls
-          Start-Process -FilePath "ssh" -ArgumentList "-p 443 -R0:localhost:3389 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 a.pinggy.io" -RedirectStandardOutput "pinggy_out.log" -RedirectStandardError "pinggy_err.log" -PassThru    
+          Write-Host "Generating SSH Key to bypass password prompt..."
+          ssh-keygen -q -t ed25519 -N '""' -f "$HOME\.ssh\id_ed25519"
+          
+          Write-Host "Creating Windows Auto-Reconnect loop..."
+          # This translates your while loop logic into a Windows batch script
+          $batchScript = @"
+          :loop
+          echo Starting Pinggy Tunnel... >> pinggy.log
+          ssh -p 443 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o BatchMode=yes -R0:localhost:3389 tcp@free.pinggy.io >> pinggy.log 2>&1
+          echo Tunnel dropped - reconnecting in 2s... >> pinggy.log
+          timeout /t 2 /nobreak >nul
+          goto loop
+          "@
+          Set-Content -Path "tunnel_loop.bat" -Value $batchScript
+          
+          Write-Host "Starting background tunnel process..."
+          Start-Process -FilePath "cmd.exe" -ArgumentList "/c tunnel_loop.bat" -WindowStyle Hidden
               
           $address = $null    
           $i = 0    
-          while ($i -lt 30) { # Wait up to 60 seconds   
-              $logContent = ""
-              if (Test-Path "pinggy_out.log") { $logContent += Get-Content "pinggy_out.log" -Raw }
-              if (Test-Path "pinggy_err.log") { $logContent += Get-Content "pinggy_err.log" -Raw }
-              
-              # Scans for the random pinggy link (e.g., ranx.pinggy.link:xxxxx)
-              $match = $logContent | Select-String -Pattern "([a-zA-Z0-9.-]*pinggy\.link:\d+)"
-              if ($match) {    
-                  $address = $match.Matches[0].Groups[1].Value    
-                  break    
-              }    
+          while ($i -lt 30) {    
+              if (Test-Path "pinggy.log") { 
+                  $logContent = Get-Content "pinggy.log" -Raw 
+                  # Scans for the tcp:// address Pinggy generates
+                  $match = $logContent | Select-String -Pattern "tcp://([a-zA-Z0-9.-]+:\d+)" -AllMatches
+                  if ($match) {    
+                      # Grabs the last address in the file in case it reconnected fast
+                      $address = $match.Matches[-1].Groups[1].Value    
+                      break    
+                  }    
+              }
               Start-Sleep -Seconds 2    
               $i++    
           }    
               
           if (-not $address) {    
              Write-Host "Failed to get Pinggy address. Logs:"
-             if (Test-Path "pinggy_out.log") { Get-Content "pinggy_out.log" }   
-             if (Test-Path "pinggy_err.log") { Get-Content "pinggy_err.log" } 
+             if (Test-Path "pinggy.log") { Get-Content "pinggy.log" }   
              exit 1    
           }    
               
@@ -104,8 +112,23 @@ jobs:
           Write-Host "Username: RDP"    
           Write-Host "Password: (Hidden - Check your Secrets)"    
           Write-Host "==================`n"    
-              
+          
+          # This loop keeps the runner alive and watches for new connections
+          $lastAddress = $address
           while ($true) {    
-              Write-Host "[$(Get-Date)] RDP Active"    
+              $logContent = Get-Content "pinggy.log" -Raw 
+              $match = $logContent | Select-String -Pattern "tcp://([a-zA-Z0-9.-]+:\d+)" -AllMatches
+              
+              if ($match) {
+                  $currentAddress = $match.Matches[-1].Groups[1].Value
+                  # If the loop reconnected and got a new link, print it!
+                  if ($currentAddress -ne $lastAddress) {
+                      Write-Host "`n[!] TUNNEL DROPPED AND RECONNECTED!"
+                      Write-Host "NEW Address: $currentAddress`n"
+                      $lastAddress = $currentAddress
+                  }
+              }
+              
+              Write-Host "[$(Get-Date)] RDP Active (Current Address: $lastAddress)"    
               Start-Sleep -Seconds 300    
           }
