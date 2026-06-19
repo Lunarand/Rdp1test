@@ -1,4 +1,4 @@
-name: Fast RDP (Pinggy + Browsers + Auto Reconnect)
+name: Fast RDP (Serveo Authenticated)
 
 on:
   workflow_dispatch:
@@ -64,18 +64,34 @@ jobs:
               
           Write-Host "Installation & Shortcuts Complete."
 
-      - name: Start Persistent Pinggy Tunnel    
+      - name: Start Persistent Serveo Tunnel    
+        env:
+          SERVEO_KEY: ${{ secrets.SERVEO_KEY }}
         run: |    
-          Write-Host "Generating SSH Key to bypass password prompt..."
-          ssh-keygen -q -t ed25519 -N '""' -f "$HOME\.ssh\id_ed25519"
+          if (-not $env:SERVEO_KEY) {    
+              Write-Error "Error: Secret 'SERVEO_KEY' is missing. Please add it to your repo secrets."    
+              exit 1    
+          }  
+
+          Write-Host "Configuring SSH Key Permissions..."
+          # Ensure .ssh directory exists
+          $SshDir = "$env:USERPROFILE\.ssh"
+          if (-not (Test-Path $SshDir)) { New-Item -ItemType Directory -Path $SshDir | Out-Null }
           
-          Write-Host "Creating Windows Auto-Reconnect loop..."
-          # This translates your while loop logic into a Windows batch script
+          # Save key strictly without formatting artifacts to prevent SSH errors
+          $KeyPath = "$SshDir\serveo_key"
+          [System.IO.File]::WriteAllText($KeyPath, $env:SERVEO_KEY + "`n")
+          
+          # Fix Windows permissions so OpenSSH accepts the private key securely
+          icacls $KeyPath /inheritance:r
+          icacls $KeyPath /grant:r "$($env:USERNAME):(R)"
+          
+          Write-Host "Creating Auto-Reconnect Loop..."
           $batchScript = @"
           :loop
-          echo Starting Pinggy Tunnel... >> pinggy.log
-          ssh -p 443 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o BatchMode=yes -R0:localhost:3389 tcp@free.pinggy.io >> pinggy.log 2>&1
-          echo Tunnel dropped - reconnecting in 2s... >> pinggy.log
+          echo Starting Serveo Tunnel... >> serveo.log
+          ssh -i "$KeyPath" -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o BatchMode=yes -R 0:localhost:3389 serveo.net >> serveo.log 2>&1
+          echo Tunnel dropped - reconnecting in 2s... >> serveo.log
           timeout /t 2 /nobreak >nul
           goto loop
           "@
@@ -86,13 +102,12 @@ jobs:
               
           $address = $null    
           $i = 0    
-          while ($i -lt 30) {    
-              if (Test-Path "pinggy.log") { 
-                  $logContent = Get-Content "pinggy.log" -Raw 
-                  # Scans for the tcp:// address Pinggy generates
-                  $match = $logContent | Select-String -Pattern "tcp://([a-zA-Z0-9.-]+:\d+)" -AllMatches
+          while ($i -lt 30) { # Wait up to 60 seconds   
+              if (Test-Path "serveo.log") { 
+                  $logContent = Get-Content "serveo.log" -Raw 
+                  # Scans for the Serveo address (e.g. serveo.net:45812)
+                  $match = $logContent | Select-String -Pattern "(serveo\.net:\d+)" -AllMatches
                   if ($match) {    
-                      # Grabs the last address in the file in case it reconnected fast
                       $address = $match.Matches[-1].Groups[1].Value    
                       break    
                   }    
@@ -102,8 +117,8 @@ jobs:
           }    
               
           if (-not $address) {    
-             Write-Host "Failed to get Pinggy address. Logs:"
-             if (Test-Path "pinggy.log") { Get-Content "pinggy.log" }   
+             Write-Host "Failed to get Serveo address. Here are the logs:"
+             if (Test-Path "serveo.log") { Get-Content "serveo.log" }   
              exit 1    
           }    
               
@@ -116,12 +131,11 @@ jobs:
           # This loop keeps the runner alive and watches for new connections
           $lastAddress = $address
           while ($true) {    
-              $logContent = Get-Content "pinggy.log" -Raw 
-              $match = $logContent | Select-String -Pattern "tcp://([a-zA-Z0-9.-]+:\d+)" -AllMatches
+              $logContent = Get-Content "serveo.log" -Raw 
+              $match = $logContent | Select-String -Pattern "(serveo\.net:\d+)" -AllMatches
               
               if ($match) {
                   $currentAddress = $match.Matches[-1].Groups[1].Value
-                  # If the loop reconnected and got a new link, print it!
                   if ($currentAddress -ne $lastAddress) {
                       Write-Host "`n[!] TUNNEL DROPPED AND RECONNECTED!"
                       Write-Host "NEW Address: $currentAddress`n"
