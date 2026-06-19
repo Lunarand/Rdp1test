@@ -19,20 +19,16 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services' -Name "MaxDisconnectionTime" -Value 0 -Force    
           # --- FIXES END HERE ---    
 
-          # Enable Remote Desktop and disable Network Level Authentication (if needed)    
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `    
-                             -Name "fDenyTSConnections" -Value 0 -Force    
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `    
-                             -Name "UserAuthentication" -Value 0 -Force    
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `    
-                             -Name "SecurityLayer" -Value 0 -Force    
+          # Enable Remote Desktop and disable Network Level Authentication (Fixed one-liners)
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force    
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force    
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 0 -Force    
 
           # Remove any existing rule with the same name to avoid duplication    
           netsh advfirewall firewall delete rule name="RDP-Tunnel"    
               
-          # Allow any incoming connection on port 3389    
-          netsh advfirewall firewall add rule name="RDP-Tunnel" `    
-            dir=in action=allow protocol=TCP localport=3389    
+          # Allow any incoming connection on port 3389 (Fixed one-liner)
+          netsh advfirewall firewall add rule name="RDP-Tunnel" dir=in action=allow protocol=TCP localport=3389    
 
           # (Optional) Restart the Remote Desktop service to ensure changes take effect    
           Restart-Service -Name TermService -Force    
@@ -67,7 +63,7 @@ jobs:
         run: |    
           Write-Host "Installing Apps..."    
               
-          # 1. Install via Chocolatey (Removed heavy/unnecessary software)
+          # 1. Install via Chocolatey    
           choco install winrar -y --no-progress    
           choco install googlechrome -y --no-progress --ignore-checksums    
           choco install brave -y --no-progress    
@@ -124,10 +120,10 @@ jobs:
               
           # 2. Login to fxTunnel
           Write-Host "Authenticating with fxTunnel..."
-          fxtun login --token $env:FXTUN_TOKEN
+          fxtunnel login --token $env:FXTUN_TOKEN
           
           # 3. Start fxTunnel in Background
-          Start-Process -FilePath "fxtun" -ArgumentList "tcp 3389" -RedirectStandardOutput "fxtun.log" -PassThru    
+          Start-Process -FilePath "fxtunnel" -ArgumentList "tcp 3389" -RedirectStandardOutput "fxtun.log" -PassThru    
               
           Write-Host "fxTunnel started. Scanning for address..."    
               
@@ -137,7 +133,7 @@ jobs:
           while ($i -lt 150) { # Wait up to 5 mins    
               if (Test-Path "fxtun.log") {    
                   $content = Get-Content "fxtun.log"    
-                  # Scans the log for the public endpoint (e.g., tunnel.fxtun.dev:41234)
+                  # Scans the log for the public endpoint
                   $match = $content | Select-String "([a-zA-Z0-9.-]+\.fxtun\.dev:[0-9]+)"    
                   if ($match) {    
                       $address = $match.Matches.Groups[1].Value    
