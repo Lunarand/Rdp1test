@@ -1,4 +1,4 @@
-name: Fast RDP (fxTunnel)
+name: Fast RDP (Pinggy + Browsers)
 
 on:
   workflow_dispatch:
@@ -36,51 +36,54 @@ jobs:
               Write-Error "Error: Secret 'PASS' is missing."    
               exit 1    
           }    
-
           $password = $env:MY_SECRET_PASS    
           $securePass = ConvertTo-SecureString $password -AsPlainText -Force    
-              
           New-LocalUser -Name "RDP" -Password $securePass -AccountNeverExpires    
           Add-LocalGroupMember -Group "Administrators" -Member "RDP"    
           Add-LocalGroupMember -Group "Remote Desktop Users" -Member "RDP"    
-              
-          if (-not (Get-LocalUser -Name "RDP")) {    
-              Write-Error "User creation failed"    
-              exit 1    
+
+      - name: Install Essential Apps & Browsers   
+        run: |    
+          Write-Host "Installing apps (Chrome, Brave, Firefox, WinRAR)..."    
+          # Install via Chocolatey
+          choco install winrar googlechrome brave firefox -y --no-progress --ignore-checksums
+
+          # FIX BRAVE: Move to Public Folder    
+          $BraveAdmin = "C:\Users\runneradmin\AppData\Local\BraveSoftware"    
+          if (Test-Path $BraveAdmin) {    
+              Copy-Item -Path $BraveAdmin -Destination "C:\" -Recurse -Force    
           }    
-
-      - name: Install Essential Apps (Fast)    
-        run: |    
-          Write-Host "Installing fast essentials..."    
-          choco install winrar googlechrome -y --no-progress --ignore-checksums
-
-      - name: Start fxTunnel & Maintain Connection    
-        env:
-          FXTUN_TOKEN: ${{ secrets.FXTUN_TOKEN }}
-        run: |    
-          if (-not $env:FXTUN_TOKEN) {    
-              Write-Error "Error: Secret 'FXTUN_TOKEN' is missing."    
-              exit 1    
-          }  
-
-          Write-Host "Installing fxTunnel..."
-          irm https://fxtun.dev/install.ps1 | iex
               
-          Write-Host "Authenticating..."
-          fxtun login --token $env:FXTUN_TOKEN
-          
-          Write-Host "Starting fxTunnel..."
-          Start-Process -FilePath "fxtun" -ArgumentList "tcp 3389" -RedirectStandardOutput "fxtun_out.log" -RedirectStandardError "fxtun_err.log" -PassThru    
+          # Create Desktop Shortcuts    
+          $WshShell = New-Object -comObject WScript.Shell    
+              
+          # Brave Shortcut    
+          $BraveLnk = $WshShell.CreateShortcut("C:\Users\Public\Desktop\Brave.lnk")    
+          $BraveLnk.TargetPath = "C:\BraveSoftware\Brave-Browser\Application\brave.exe"    
+          $BraveLnk.Save()    
+
+          # WinRAR Shortcut    
+          $RarLnk = $WshShell.CreateShortcut("C:\Users\Public\Desktop\WinRAR.lnk")    
+          $RarLnk.TargetPath = "C:\Program Files\WinRAR\WinRAR.exe"    
+          $RarLnk.Save()    
+              
+          Write-Host "Installation & Shortcuts Complete."
+
+      - name: Start Pinggy Tunnel    
+        run: |    
+          Write-Host "Starting Pinggy Tunnel..."
+          # Connects over web port 443 to bypass provider firewalls
+          Start-Process -FilePath "ssh" -ArgumentList "-p 443 -R0:localhost:3389 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 a.pinggy.io" -RedirectStandardOutput "pinggy_out.log" -RedirectStandardError "pinggy_err.log" -PassThru    
               
           $address = $null    
           $i = 0    
           while ($i -lt 30) { # Wait up to 60 seconds   
               $logContent = ""
-              if (Test-Path "fxtun_out.log") { $logContent += Get-Content "fxtun_out.log" -Raw }
-              if (Test-Path "fxtun_err.log") { $logContent += Get-Content "fxtun_err.log" -Raw }
+              if (Test-Path "pinggy_out.log") { $logContent += Get-Content "pinggy_out.log" -Raw }
+              if (Test-Path "pinggy_err.log") { $logContent += Get-Content "pinggy_err.log" -Raw }
               
-              # Scans for the fxTunnel address properly
-              $match = $logContent | Select-String -Pattern "([a-zA-Z0-9.-]*fxtun\.dev:\d+)"
+              # Scans for the random pinggy link (e.g., ranx.pinggy.link:xxxxx)
+              $match = $logContent | Select-String -Pattern "([a-zA-Z0-9.-]*pinggy\.link:\d+)"
               if ($match) {    
                   $address = $match.Matches[0].Groups[1].Value    
                   break    
@@ -90,9 +93,9 @@ jobs:
           }    
               
           if (-not $address) {    
-             Write-Host "Failed to get fxTunnel address. Printing raw logs so you can see why:"
-             if (Test-Path "fxtun_out.log") { Get-Content "fxtun_out.log" }   
-             if (Test-Path "fxtun_err.log") { Get-Content "fxtun_err.log" } 
+             Write-Host "Failed to get Pinggy address. Logs:"
+             if (Test-Path "pinggy_out.log") { Get-Content "pinggy_out.log" }   
+             if (Test-Path "pinggy_err.log") { Get-Content "pinggy_err.log" } 
              exit 1    
           }    
               
